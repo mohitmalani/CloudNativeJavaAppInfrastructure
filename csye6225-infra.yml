@@ -155,7 +155,7 @@ Resources:
        DestinationCidrBlock: 0.0.0.0/0
        GatewayId:
          Ref: myInternetGateway
-    DependsOn: [ myRouteTable, myInternetGateway ]
+    DependsOn: [ myRouteTable, myInternetGateway, AttachGateway ]
   
   myPrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -458,6 +458,8 @@ Resources:
   CodeDeployEC2ServiceRole:
     Type: "AWS::IAM::Role"
     Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
       Description: Allows EC2 instances to call AWS services on your behalf
       RoleName: CodeDeployEC2ServiceRole
       AssumeRolePolicyDocument:
@@ -620,7 +622,15 @@ Resources:
                   - myRDSInstance
                   - Endpoint.Address
                 - :3306/csye6225" >> /etc/environment
+            - Fn::Join:
+              - ''
+              - - echo "export DB_URL=jdbc:mysql://
+                - Fn::GetAtt:
+                  - myRDSInstance
+                  - Endpoint.Address
+                - :3306/csye6225" >> /etc/profile.d/envvariables.sh
             - echo "DBUSERNAME=csye6225" >> /etc/environment
+            - echo "export DBUSERNAME=csye6225" >> /etc/profile.d/envvariables.sh
             - Fn::Join:
               - ''
               - - echo "DBPASSWORD=
@@ -628,17 +638,35 @@ Resources:
                 - '" >> /etc/environment'
             - Fn::Join:
               - ''
+              - - echo "export DBPASSWORD=
+                - !Ref dbPassword
+                - '" >> /etc/profile.d/envvariables.sh'
+            - Fn::Join:
+              - ''
               - - echo "S3_BUCKET_NAME=
                 - !Ref myS3Bucket 
                 - '" >> /etc/environment'
             - Fn::Join:
               - ''
+              - - echo "export S3_BUCKET_NAME=
+                - !Ref myS3Bucket 
+                - '" >> /etc/profile.d/envvariables.sh'
+            - Fn::Join:
+              - ''
               - - echo "REGION=
                 - !Ref AWS::Region
                 - '" >> /etc/environment'
+            - Fn::Join:
+              - ''
+              - - echo "export REGION=
+                - !Ref AWS::Region
+                - '" >> /etc/profile.d/envvariables.sh'
+            - sudo chmod 755 /etc/profile.d/envvariables.sh
+            - sudo chown ec2-user /etc/profile.d/envvariables.sh
             - sudo systemctl start health-check-api.service
             - sudo systemctl enable health-check-api.service
             - sudo systemctl status health-check-api.service
+            - sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/cloudwatch-config.json -s
     DependsOn: [myS3Bucket, myRDSInstance]
 
   myAutoScalingGroup:
