@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CSYE 6225 Assignment 3
+Parameters:
+  VpcCidrBlock:
+    Description: "CIDR block for VPC"
+    Type: String
+    Default: "10.0.0.0/16"
+  NoOfSubnets:
+    Description: "Number of Subnets"
+    Type: String
+    Default: 3
+  SubnetOffset:
+    Description: "Subnet Offset"
+    Type: String
+    Default: 8
+Resources:
+  myVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidrBlock
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      InstanceTenancy: 'default'
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName} -csye6225-vpc
+  mySubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: myVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '']
+      CidrBlock: !Select [ 0, !Cidr [ !GetAtt myVPC.CidrBlock, !Ref NoOfSubnets, !Ref SubnetOffset ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName} -csye6225-subnet1
+  mySubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: myVPC
+      AvailabilityZone: !Select [ 1, !GetAZs '']
+      CidrBlock: !Select [ 1, !Cidr [ !GetAtt myVPC.CidrBlock, !Ref NoOfSubnets, !Ref SubnetOffset ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName} -csye6225-subnet2
+  mySubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: myVPC
+      AvailabilityZone: !Select [ 2, !GetAZs '']
+      CidrBlock: !Select [ 2, !Cidr [ !GetAtt myVPC.CidrBlock, !Ref NoOfSubnets, !Ref SubnetOffset ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName} -csye6225-subnet3
+  myInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName} -csye6225-igw
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: myVPC
+      InternetGatewayId:
+        Ref: myInternetGateway
+  myRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:  
+        Ref: myVPC
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName} -csye6225-rt
+  mySubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: mySubnet1
+      RouteTableId:
+        Ref: myRouteTable
+  mySubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: mySubnet2
+      RouteTableId:
+        Ref: myRouteTable
+  mySubnetRouteTableAssociation3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: mySubnet3
+      RouteTableId:
+        Ref: myRouteTable
+  myRoute:
+    Type: AWS::EC2::Route
+    DependsOn: myInternetGateway
+    Properties:
+       RouteTableId:
+         Ref: myRouteTable
+       DestinationCidrBlock: 0.0.0.0/0
+       GatewayId:
+         Ref: myInternetGateway
+Outputs:
+  VpcId:
+    Description: The VPC ID
+    Value: !Ref myVPC
+  SubnetId1:
+    Description: The 1st Subnet ID
+    Value: !Ref mySubnet1
+  SubnetId2:
+    Description: The 2nd Subnet ID
+    Value: !Ref mySubnet2
+  SubnetId3:
+    Description: The 3rd Subnet ID
+    Value: !Ref mySubnet3
+  RouteTableId:
+    Description: Route Table ID
+    Value: !Ref myRouteTable
