@@ -60,3 +60,33 @@ Use below commands to create stack using cloudformation:
 
 And to delete stack:
 > aws cloudformation delete-stack --stack-name myvpc-a3
+
+As part of **Assignment #04** following resources are added in CloudFormation template:
+
+**App Security Group**
+
+Create an EC2 security group for your EC2 instances that will host web applications.
+
+Add ingress rule to allow TCP traffic on ports 22, 80, 443, and port on which your application runs from anywhere in the world.
+
+This security group will be referred to as the application security group.
+
+**EC2 Instance**
+
+The EC2 instance should belong to the VPC you have created.
+
+Application security group should be attached to this EC2 instance.
+
+Make sure the EBS volumes are terminated when EC2 instances are terminated.
+
+Parameter	Value
+
+Amazon Machine Image (AMI)	Your custom AMI
+
+Instance Type	t2.micro
+
+Protect against accidental termination	No
+
+Root Volume Size	20
+
+Root Volume Type	General Purpose SSD (GP2)

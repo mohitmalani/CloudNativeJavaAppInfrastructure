@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: CSYE 6225 Assignment 3
+Description: CSYE 6225 Cloud Formatiion
 Parameters:
   VpcCidrBlock:
     Description: "CIDR block for VPC"
@@ -13,6 +13,12 @@ Parameters:
     Description: "Subnet Offset"
     Type: String
     Default: 8
+  imageId:
+    Description: "AMI Image ID"
+    Type: String
+  keyName:
+    Description: "Key Name"
+    Type: String
 Resources:
   myVPC:
     Type: AWS::EC2::VPC
@@ -23,7 +29,7 @@ Resources:
       InstanceTenancy: 'default'
       Tags:
       - Key: Name
-        Value: !Sub ${AWS::StackName} -csye6225-vpc
+        Value: !Sub ${AWS::StackName}-csye6225-vpc
   mySubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -34,7 +40,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: Name
-        Value: !Sub ${AWS::StackName} -csye6225-subnet1
+        Value: !Sub ${AWS::StackName}-csye6225-subnet1
   mySubnet2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -45,7 +51,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: Name
-        Value: !Sub ${AWS::StackName} -csye6225-subnet2
+        Value: !Sub ${AWS::StackName}-csye6225-subnet2
   mySubnet3:
     Type: AWS::EC2::Subnet
     Properties:
@@ -56,13 +62,13 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: Name
-        Value: !Sub ${AWS::StackName} -csye6225-subnet3
+        Value: !Sub ${AWS::StackName}-csye6225-subnet3
   myInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
       - Key: Name
-        Value: !Sub ${AWS::StackName} -csye6225-igw
+        Value: !Sub ${AWS::StackName}-csye6225-igw
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
@@ -77,7 +83,7 @@ Resources:
         Ref: myVPC
       Tags:
       - Key: Name
-        Value: !Sub ${AWS::StackName} -csye6225-rt
+        Value: !Sub ${AWS::StackName}-csye6225-rt
   mySubnetRouteTableAssociation1:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -108,6 +114,51 @@ Resources:
        DestinationCidrBlock: 0.0.0.0/0
        GatewayId:
          Ref: myInternetGateway
+  applicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId:
+         Ref: myVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8080
+        ToPort: 8080
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-csye6225-sg
+  myEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref imageId
+      BlockDeviceMappings:
+        - DeviceName: /dev/sdm  
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp2
+            DeleteOnTermination: true
+      SubnetId: 
+          Ref: mySubnet1
+      SecurityGroupIds: 
+        - !Ref applicationSecurityGroup
+      KeyName: !Ref keyName
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-csye6225-ec2
 Outputs:
   VpcId:
     Description: The VPC ID
@@ -124,3 +175,6 @@ Outputs:
   RouteTableId:
     Description: Route Table ID
     Value: !Ref myRouteTable
+  EC2InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref myEC2Instance
