@@ -1,8 +1,5 @@
 # infrastructure
 
-
-**Assignment #03**
-
 **AWS Networking Setup**
 
 	Here is what you need to do for networking infrastructure setup:
@@ -43,13 +40,12 @@ OR
 Use below commands to create stack using cloudformation:
 
  1. Without Parameters:
-	> aws cloudformation create-stack --stack-name myvpc-a3 --template-body file://csye6225-infra.yml
+	> aws cloudformation create-stack --stack-name myvpc-test --template-body file://csye6225-infra.yml
 
- 2. With Parameters:
-	> aws cloudformation create-stack --stack-name myvpc-a3 --template-body file://csye6225-infra.yml \
-		--parameters ParameterKey=VpcCidrBlock,ParameterValue="172.31.0.0/16" \
-					 ParameterKey=NoOfSubnets,ParameterValue="3" \
-					 ParameterKey=SubnetOffset,ParameterValue="8" 
+ 2. With Parameter file:
+	> aws cloudformation create-stack --stack-name my-vpc-a10 --template-body file://csye6225-infra.yml \
+	--parameter file://param.json \
+	--capabilities CAPABILITY_NAMED_IAM
 					 
  3. With deploy command and parameters in json file:
         > aws cloudformation deploy --stack-name testStack --template-file csye6225-infra.yml --parameter-overrides file://param.json
@@ -59,4 +55,12 @@ Use below commands to create stack using cloudformation:
 					 
 
 And to delete stack:
-> aws cloudformation delete-stack --stack-name myvpc-a3
+> aws cloudformation delete-stack --stack-name myvpc-a10
+
+
+**AWS CLI Command to import SSL certificate**
+
+> aws acm import-certificate --certificate fileb://prod_avinashraikesh_me.crt \
+--certificate-chain fileb://prod_avinashraikesh_me.ca-bundle \
+--private-key fileb://PrivateKey.pem
+
