@@ -19,6 +19,12 @@ Parameters:
   keyName:
     Description: "Key Name"
     Type: String
+  S3BucketName:
+    Description: "S3 Bucket Name"
+    Type: String
+  dbPassword:
+    Description: "Database Password"
+    Type: String
 Resources:
   myVPC:
     Type: AWS::EC2::VPC
@@ -63,6 +69,37 @@ Resources:
       Tags:
       - Key: Name
         Value: !Sub ${AWS::StackName}-csye6225-subnet3
+  myPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: myVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '']
+      CidrBlock: !Select [ 3, !Cidr [ !GetAtt myVPC.CidrBlock, !Ref NoOfSubnets, !Ref SubnetOffset ]]
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-csye6225-private-subnet1
+  myPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: myVPC
+      AvailabilityZone: !Select [ 1, !GetAZs '']
+      CidrBlock: !Select [ 4, !Cidr [ !GetAtt myVPC.CidrBlock, !Ref NoOfSubnets, !Ref SubnetOffset ]]
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-csye6225-private-subnet2
+  myPrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: myVPC
+      AvailabilityZone: !Select [ 2, !GetAZs '']
+      CidrBlock: !Select [ 5, !Cidr [ !GetAtt myVPC.CidrBlock, !Ref NoOfSubnets, !Ref SubnetOffset ]]
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-csye6225-private-subnet3
+
   myInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
@@ -114,6 +151,37 @@ Resources:
        DestinationCidrBlock: 0.0.0.0/0
        GatewayId:
          Ref: myInternetGateway
+  
+  myPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:  
+        Ref: myVPC
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-csye6225-private-rt
+  myPrivateSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: myPrivateSubnet1
+      RouteTableId:
+        Ref: myPrivateRouteTable
+  myPrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: myPrivateSubnet2
+      RouteTableId:
+        Ref: myPrivateRouteTable
+  myPrivateSubnetRouteTableAssociation3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: myPrivateSubnet3
+      RouteTableId:
+        Ref: myPrivateRouteTable
+
   applicationSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -139,7 +207,136 @@ Resources:
         CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-csye6225-sg
+          Value: !Sub ${AWS::StackName}-csye6225-app-sg
+
+  databaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow db connection to application
+      VpcId:
+         Ref: myVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        SourceSecurityGroupId: !Ref applicationSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-csye6225-db-sg
+  
+  myDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet for RDS instances
+      SubnetIds:
+        - !Ref myPrivateSubnet1
+        - !Ref myPrivateSubnet2
+        - !Ref myPrivateSubnet3
+
+  myRDSDBParameterGroup:
+    Type: 'AWS::RDS::DBParameterGroup'
+    Properties:
+      Description: MySQL Parameter Group
+      Family: mysql8.0
+      Parameters:
+        sql_mode: IGNORE_SPACE
+
+  myRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: csye6225
+      AllocatedStorage: 100
+      DBInstanceClass: db.t3.micro
+      Engine: MySQL
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref myDBSubnetGroup
+      DBParameterGroupName: !Ref myRDSDBParameterGroup
+      DBInstanceIdentifier: csye6225
+      MasterUsername: csye6225
+      MasterUserPassword: !Ref dbPassword
+      MultiAZ: false 
+      VPCSecurityGroups:
+        - !Ref databaseSecurityGroup
+      Tags:
+        - Key: Name
+          Value: DBServer
+  
+  myS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      BucketName:  
+        !Sub
+          - '${RandomGUID}.${S3BucketName}'
+          - { RandomGUID: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId ]]]] }
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+            - Id: StandardIARule
+              Status: Enabled
+              Transitions:
+                - TransitionInDays: 30
+                  StorageClass: STANDARD_IA
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: 
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  myIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: EC2-CSYE6225
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+  
+  WebAppS3:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: WebAppS3
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+            Resource:
+              - Fn::Join:
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref myS3Bucket
+              - Fn::Join:
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref myS3Bucket
+                  - '/*'
+      Roles:
+        - Ref: myIAMRole
+    DependsOn: myS3Bucket
+
+  myEC2InstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: "/"
+      Roles:
+        -
+          Ref: myIAMRole
+  
+
   myEC2Instance:
     Type: AWS::EC2::Instance
     Properties:
@@ -156,25 +353,49 @@ Resources:
       SecurityGroupIds: 
         - !Ref applicationSecurityGroup
       KeyName: !Ref keyName
+      IamInstanceProfile: 
+          Ref: myEC2InstanceProfile
       Tags:
-      - Key: Name
-        Value: !Sub ${AWS::StackName}-csye6225-ec2
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-csye6225-ec2
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+          - "\n"
+          - - "#!/bin/bash"
+            - yum update -y
+            - Fn::Join:
+              - ''
+              - - echo "DB_URL=jdbc:mysql://
+                - Fn::GetAtt:
+                  - myRDSInstance
+                  - Endpoint.Address
+                - :3306/csye6225" >> /etc/environment
+            - echo "DBUSERNAME=csye6225" >> /etc/environment
+            - Fn::Join:
+              - ''
+              - - echo "DBPASSWORD=
+                - !Ref dbPassword
+                - '" >> /etc/environment'
+            - Fn::Join:
+              - ''
+              - - echo "S3_BUCKET_NAME=
+                - !Ref myS3Bucket 
+                - '" >> /etc/environment'
+            - Fn::Join:
+              - ''
+              - - echo "REGION=
+                - !Ref AWS::Region
+                - '" >> /etc/environment'
+            - sudo systemctl start health-check-api.service
+            - sudo systemctl enable health-check-api.service
+            - sudo systemctl status health-check-api.service
+    DependsOn: [myS3Bucket, myRDSInstance]
+
 Outputs:
   VpcId:
     Description: The VPC ID
     Value: !Ref myVPC
-  SubnetId1:
-    Description: The 1st Subnet ID
-    Value: !Ref mySubnet1
-  SubnetId2:
-    Description: The 2nd Subnet ID
-    Value: !Ref mySubnet2
-  SubnetId3:
-    Description: The 3rd Subnet ID
-    Value: !Ref mySubnet3
-  RouteTableId:
-    Description: Route Table ID
-    Value: !Ref myRouteTable
   EC2InstanceId:
     Description: EC2 Instance ID
     Value: !Ref myEC2Instance
