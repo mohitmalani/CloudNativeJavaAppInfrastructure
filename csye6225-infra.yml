@@ -28,6 +28,9 @@ Parameters:
   CodeDeployBucket:
     Description: "S3 Bucket ARN where artifacts will be delpoyed"
     Type: String
+  certificateARN:
+    Description: "SSL Certificate ARN"
+    Type: String
 Resources:
   myVPC:
     Type: AWS::EC2::VPC
@@ -194,10 +197,10 @@ Resources:
       VpcId:
          Ref: myVPC
       SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 80
-        ToPort: 80
-        CidrIp: 0.0.0.0/0
+      # - IpProtocol: tcp
+      #   FromPort: 80
+      #   ToPort: 80
+      #   CidrIp: 0.0.0.0/0
       - IpProtocol: tcp
         FromPort: 443
         ToPort: 443
@@ -221,6 +224,10 @@ Resources:
         FromPort: 8080
         ToPort: 8080
         SourceSecurityGroupId: !Ref loadBalancerSecurityGroup
+      # - IpProtocol: tcp
+      #   FromPort: 443
+      #   ToPort: 443
+      #   SourceSecurityGroupId: !Ref loadBalancerSecurityGroup
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-csye6225-app-sg
@@ -256,6 +263,25 @@ Resources:
       Family: mysql8.0
       Parameters:
         sql_mode: IGNORE_SPACE
+  
+  myRDSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: RDS encryption KMS key
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-rds-1
+        Statement:
+          - Sid: Enable IAM policies
+            Effect: Allow
+            Principal:
+              AWS: !Join 
+              - ''
+              - - 'arn:aws:iam::'
+                - !Ref 'AWS::AccountId'
+                - ':root'
+            Action: 'kms:*'
+            Resource: '*'
 
   myRDSInstance:
     Type: AWS::RDS::DBInstance
@@ -270,7 +296,10 @@ Resources:
       DBInstanceIdentifier: csye6225
       MasterUsername: csye6225
       MasterUserPassword: !Ref dbPassword
-      MultiAZ: false 
+      MultiAZ: false
+      StorageEncrypted: true
+      CACertificateIdentifier: rds-ca-2019
+      KmsKeyId: !Ref myRDSKey
       VPCSecurityGroups:
         - !Ref databaseSecurityGroup
       Tags:
@@ -608,91 +637,146 @@ Resources:
   #           - sudo systemctl status health-check-api.service
   #   DependsOn: [myS3Bucket, myRDSInstance]
 
-  myAsgLaunchConfig:
-    Type: AWS::AutoScaling::LaunchConfiguration
+  myKey:
+    Type: AWS::KMS::Key
     Properties:
-      LaunchConfigurationName: asg_launch_config
-      ImageId: !Ref imageId
-      InstanceType: t2.micro
-      KeyName: !Ref keyName
-      AssociatePublicIpAddress: true
-      SecurityGroups: 
-        - !Ref applicationSecurityGroup
-      BlockDeviceMappings:
-      - DeviceName: /dev/sdm
-        Ebs:
-          VolumeType: gp2
-          VolumeSize: 20
-          DeleteOnTermination: true
-      IamInstanceProfile: !Ref myEC2InstanceProfile
-      UserData:
-        Fn::Base64:
-          Fn::Join:
-          - "\n"
-          - - "#!/bin/bash"
-            - yum update -y
-            - Fn::Join:
+      Description: EBS encryption KMS key
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-ebs-1
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join 
               - ''
-              - - echo "DB_URL=jdbc:mysql://
-                - Fn::GetAtt:
-                  - myRDSInstance
-                  - Endpoint.Address
-                - :3306/csye6225" >> /etc/environment
-            - Fn::Join:
+              - - 'arn:aws:iam::'
+                - !Ref 'AWS::AccountId'
+                - ':root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS: !Join 
               - ''
-              - - echo "export DB_URL=jdbc:mysql://
-                - Fn::GetAtt:
-                  - myRDSInstance
-                  - Endpoint.Address
-                - :3306/csye6225" >> /etc/profile.d/envvariables.sh
-            - echo "DBUSERNAME=csye6225" >> /etc/environment
-            - echo "export DBUSERNAME=csye6225" >> /etc/profile.d/envvariables.sh
-            - Fn::Join:
+              - - 'arn:aws:iam::'
+                - !Ref 'AWS::AccountId'
+                - ':role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling'
+            Action:
+              - 'kms:CreateGrant'
+            Resource: '*'
+          - Sid: Allow ServiceLinked Role CMK
+            Effect: Allow
+            Principal:
+              AWS: !Join 
               - ''
-              - - echo "DBPASSWORD=
-                - !Ref dbPassword
-                - '" >> /etc/environment'
-            - Fn::Join:
-              - ''
-              - - echo "export DBPASSWORD=
-                - !Ref dbPassword
-                - '" >> /etc/profile.d/envvariables.sh'
-            - Fn::Join:
-              - ''
-              - - echo "S3_BUCKET_NAME=
-                - !Ref myS3Bucket 
-                - '" >> /etc/environment'
-            - Fn::Join:
-              - ''
-              - - echo "export S3_BUCKET_NAME=
-                - !Ref myS3Bucket 
-                - '" >> /etc/profile.d/envvariables.sh'
-            - Fn::Join:
-              - ''
-              - - echo "REGION=
-                - !Ref AWS::Region
-                - '" >> /etc/environment'
-            - Fn::Join:
-              - ''
-              - - echo "export REGION=
-                - !Ref AWS::Region
-                - '" >> /etc/profile.d/envvariables.sh'
-            - Fn::Join:
-              - ''
-              - - echo "SNS_TOPIC_ARN=
-                - !Ref SNSTopic
-                - '" >> /etc/environment'
-            - Fn::Join:
-              - ''
-              - - echo "export SNS_TOPIC_ARN=
-                - !Ref SNSTopic
-                - '" >> /etc/profile.d/envvariables.sh'
-            - sudo chmod 755 /etc/profile.d/envvariables.sh
-            - sudo chown ec2-user /etc/profile.d/envvariables.sh
-            - sudo systemctl start health-check-api.service
-            - sudo systemctl enable health-check-api.service
-            - sudo systemctl status health-check-api.service
-            - sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/cloudwatch-config.json -s
+              - - 'arn:aws:iam::'
+                - !Ref 'AWS::AccountId'
+                - ':role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling'
+            Action:
+              - 'kms:DescribeKey'
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey'
+              - 'kms:GenerateDataKeyWithoutPlaintext'
+              - 'kms:Update*'
+            Resource: '*'
+
+  myAsgLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: asg_launch_template
+      LaunchTemplateData:
+        IamInstanceProfile: 
+          Arn: !GetAtt 
+            - myEC2InstanceProfile
+            - Arn
+        ImageId: !Ref imageId
+        InstanceType: t2.micro
+        KeyName: !Ref keyName
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref applicationSecurityGroup
+        BlockDeviceMappings:
+        - DeviceName: /dev/sdm
+          Ebs:
+            Encrypted: true
+            KmsKeyId: !Ref myKey
+            VolumeType: gp2
+            VolumeSize: 20
+            DeleteOnTermination: true
+        UserData:
+          Fn::Base64:
+            Fn::Join:
+            - "\n"
+            - - "#!/bin/bash"
+              - yum update -y
+              - Fn::Join:
+                - ''
+                - - echo "DB_URL=jdbc:mysql://
+                  - Fn::GetAtt:
+                    - myRDSInstance
+                    - Endpoint.Address
+                  - :3306/csye6225?useSSL=true&requireSSL=true&sslMode=REQUIRED" >> /etc/environment
+              - Fn::Join:
+                - ''
+                - - echo "export DB_URL=jdbc:mysql://
+                  - Fn::GetAtt:
+                    - myRDSInstance
+                    - Endpoint.Address
+                  - :3306/csye6225?useSSL=true&requireSSL=true&sslMode=REQUIRED" >> /etc/profile.d/envvariables.sh
+              - echo "DBUSERNAME=csye6225" >> /etc/environment
+              - echo "export DBUSERNAME=csye6225" >> /etc/profile.d/envvariables.sh
+              - Fn::Join:
+                - ''
+                - - echo "DBPASSWORD=
+                  - !Ref dbPassword
+                  - '" >> /etc/environment'
+              - Fn::Join:
+                - ''
+                - - echo "export DBPASSWORD=
+                  - !Ref dbPassword
+                  - '" >> /etc/profile.d/envvariables.sh'
+              - Fn::Join:
+                - ''
+                - - echo "S3_BUCKET_NAME=
+                  - !Ref myS3Bucket 
+                  - '" >> /etc/environment'
+              - Fn::Join:
+                - ''
+                - - echo "export S3_BUCKET_NAME=
+                  - !Ref myS3Bucket 
+                  - '" >> /etc/profile.d/envvariables.sh'
+              - Fn::Join:
+                - ''
+                - - echo "REGION=
+                  - !Ref AWS::Region
+                  - '" >> /etc/environment'
+              - Fn::Join:
+                - ''
+                - - echo "export REGION=
+                  - !Ref AWS::Region
+                  - '" >> /etc/profile.d/envvariables.sh'
+              - Fn::Join:
+                - ''
+                - - echo "SNS_TOPIC_ARN=
+                  - !Ref SNSTopic
+                  - '" >> /etc/environment'
+              - Fn::Join:
+                - ''
+                - - echo "export SNS_TOPIC_ARN=
+                  - !Ref SNSTopic
+                  - '" >> /etc/profile.d/envvariables.sh'
+              - sudo chmod 755 /etc/profile.d/envvariables.sh
+              - sudo chown ec2-user /etc/profile.d/envvariables.sh
+              - sudo systemctl start health-check-api.service
+              - sudo systemctl enable health-check-api.service
+              - sudo systemctl status health-check-api.service
+              - sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/cloudwatch-config.json -s
     DependsOn: [myS3Bucket, myRDSInstance]
 
   myAutoScalingGroup:
@@ -711,7 +795,9 @@ Resources:
       DesiredCapacity: '1'
       HealthCheckType: EC2
       HealthCheckGracePeriod: 90
-      LaunchConfigurationName: !Ref myAsgLaunchConfig
+      LaunchTemplate:
+        LaunchTemplateId: !Ref myAsgLaunchTemplate
+        Version: !GetAtt myAsgLaunchTemplate.LatestVersionNumber
       TargetGroupARNs: 
         - !Ref myLBTargetGroup
       MinSize: '1'
@@ -787,7 +873,7 @@ Resources:
       LoadBalancerAttributes:
         - Key: idle_timeout.timeout_seconds
           Value: '60'
-      Name: !Sub ${AWS::StackName}-csye6225-load-balancer
+      Name: !Sub ${AWS::StackName}-csye6225-loadBalancer
       Scheme: internet-facing
       SecurityGroups: 
         - !Ref loadBalancerSecurityGroup
@@ -799,7 +885,7 @@ Resources:
         - Key: Application
           Value: WebApp
         - Key: Name
-          Value: !Sub ${AWS::StackName}-csye6225-load-balancer
+          Value: !Sub ${AWS::StackName}-csye6225-loadBalancer
       Type: application    
 
   myLBTargetGroup:
@@ -825,6 +911,20 @@ Resources:
         - Key: Name
           Value: !Sub ${AWS::StackName}-csye6225-lb-tg
   
+  # myLoadBalancerListener:
+  #   Type: AWS::ElasticLoadBalancingV2::Listener
+  #   DependsOn:
+  #     - myLBTargetGroup
+  #     - myLoadBalancer
+  #   Properties:
+  #     DefaultActions:
+  #       - Type: forward
+  #         TargetGroupArn: !Ref myLBTargetGroup
+  #     LoadBalancerArn: !Ref myLoadBalancer
+  #     Port: 80
+  #     Protocol: HTTP
+
+  # HTTPS Listener
   myLoadBalancerListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     DependsOn:
@@ -835,8 +935,10 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref myLBTargetGroup
       LoadBalancerArn: !Ref myLoadBalancer
-      Port: 80
-      Protocol: HTTP
+      Certificates: 
+        - CertificateArn : !Ref certificateARN
+      Port: 443
+      Protocol: HTTPS
   
   myDNSRecord:
     Type: AWS::Route53::RecordSet
