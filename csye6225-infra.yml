@@ -182,10 +182,10 @@ Resources:
       RouteTableId:
         Ref: myPrivateRouteTable
 
-  applicationSecurityGroup:
+  loadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow http to client host
+      GroupDescription: Allow http to load balancer
       VpcId:
          Ref: myVPC
       SecurityGroupIngress:
@@ -194,17 +194,28 @@ Resources:
         ToPort: 80
         CidrIp: 0.0.0.0/0
       - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-csye6225-lb-sg
+
+  applicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId:
+         Ref: myVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
         FromPort: 22
         ToPort: 22
         CidrIp: 0.0.0.0/0
       - IpProtocol: tcp
-        FromPort: 443
-        ToPort: 443
-        CidrIp: 0.0.0.0/0
-      - IpProtocol: tcp
         FromPort: 8080
         ToPort: 8080
-        CidrIp: 0.0.0.0/0
+        SourceSecurityGroupId: !Ref loadBalancerSecurityGroup
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-csye6225-app-sg
@@ -337,27 +348,78 @@ Resources:
           Ref: myIAMRole
   
 
-  myEC2Instance:
-    Type: AWS::EC2::Instance
+  # myEC2Instance:
+  #   Type: AWS::EC2::Instance
+  #   Properties:
+  #     InstanceType: t2.micro
+  #     ImageId: !Ref imageId
+  #     BlockDeviceMappings:
+  #       - DeviceName: /dev/sdm  
+  #         Ebs:
+  #           VolumeSize: 20
+  #           VolumeType: gp2
+  #           DeleteOnTermination: true
+  #     SubnetId: 
+  #         Ref: mySubnet1
+  #     SecurityGroupIds: 
+  #       - !Ref applicationSecurityGroup
+  #     KeyName: !Ref keyName
+  #     IamInstanceProfile: 
+  #         Ref: myEC2InstanceProfile
+  #     Tags:
+  #       - Key: Name
+  #         Value: !Sub ${AWS::StackName}-csye6225-ec2
+  #     UserData:
+  #       Fn::Base64:
+  #         Fn::Join:
+  #         - "\n"
+  #         - - "#!/bin/bash"
+  #           - yum update -y
+  #           - Fn::Join:
+  #             - ''
+  #             - - echo "DB_URL=jdbc:mysql://
+  #               - Fn::GetAtt:
+  #                 - myRDSInstance
+  #                 - Endpoint.Address
+  #               - :3306/csye6225" >> /etc/environment
+  #           - echo "DBUSERNAME=csye6225" >> /etc/environment
+  #           - Fn::Join:
+  #             - ''
+  #             - - echo "DBPASSWORD=
+  #               - !Ref dbPassword
+  #               - '" >> /etc/environment'
+  #           - Fn::Join:
+  #             - ''
+  #             - - echo "S3_BUCKET_NAME=
+  #               - !Ref myS3Bucket 
+  #               - '" >> /etc/environment'
+  #           - Fn::Join:
+  #             - ''
+  #             - - echo "REGION=
+  #               - !Ref AWS::Region
+  #               - '" >> /etc/environment'
+  #           - sudo systemctl start health-check-api.service
+  #           - sudo systemctl enable health-check-api.service
+  #           - sudo systemctl status health-check-api.service
+  #   DependsOn: [myS3Bucket, myRDSInstance]
+
+  myAsgLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      InstanceType: t2.micro
+      LaunchConfigurationName: asg_launch_config
       ImageId: !Ref imageId
-      BlockDeviceMappings:
-        - DeviceName: /dev/sdm  
-          Ebs:
-            VolumeSize: 20
-            VolumeType: gp2
-            DeleteOnTermination: true
-      SubnetId: 
-          Ref: mySubnet1
-      SecurityGroupIds: 
-        - !Ref applicationSecurityGroup
+      InstanceType: t2.micro
       KeyName: !Ref keyName
-      IamInstanceProfile: 
-          Ref: myEC2InstanceProfile
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-csye6225-ec2
+      AssociatePublicIpAddress: true
+      SecurityGroups: 
+        - !Ref applicationSecurityGroup
+      BlockDeviceMappings:
+      - DeviceName: /dev/sdm
+        Ebs:
+          VolumeType: gp2
+          VolumeSize: 20
+          DeleteOnTermination: true
+      IamInstanceProfile: !Ref myEC2InstanceProfile
       UserData:
         Fn::Base64:
           Fn::Join:
@@ -392,10 +454,167 @@ Resources:
             - sudo systemctl status health-check-api.service
     DependsOn: [myS3Bucket, myRDSInstance]
 
+  myAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${AWS::StackName}-csye6225-asg'
+      AvailabilityZones: 
+        - !Select [ 0, !GetAZs '']
+        - !Select [ 1, !GetAZs '']
+        - !Select [ 2, !GetAZs '']
+      VPCZoneIdentifier:
+      - !Ref mySubnet1
+      - !Ref mySubnet2
+      - !Ref mySubnet3
+      Cooldown: '60'
+      DesiredCapacity: '1'
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 90
+      LaunchConfigurationName: !Ref myAsgLaunchConfig
+      TargetGroupARNs: 
+        - !Ref myLBTargetGroup
+      MinSize: '1'
+      MaxSize: '5'
+      Tags:
+      - Key: Application 
+        Value: WebApp
+        PropagateAtLaunch: 'true'
+      - Key: Name
+        Value: !Ref myAsgLaunchConfig
+        PropagateAtLaunch: 'true'
+        
+  WebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName:
+        Ref: myAutoScalingGroup
+      Cooldown: '60'
+      ScalingAdjustment: '1'
+      
+  WebServerScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName:
+        Ref: myAutoScalingGroup
+      Cooldown: '60'
+      ScalingAdjustment: "-1"  
+  
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-up if CPU > 5% for 1 minute
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '5'
+      AlarmActions:
+      - Ref: WebServerScaleUpPolicy
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value:
+          Ref: myAutoScalingGroup
+      ComparisonOperator: GreaterThanThreshold
+      
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-down if CPU < 3% for 1 minute
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '3'
+      AlarmActions:
+      - Ref: WebServerScaleDownPolicy
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value:
+          Ref: myAutoScalingGroup
+      ComparisonOperator: LessThanThreshold
+
+  myLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: 
+      - myInternetGateway
+    Properties:
+      IpAddressType: ipv4
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Name: !Sub ${AWS::StackName}-csye6225-load-balancer
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref loadBalancerSecurityGroup
+      Subnets:
+        - !Ref mySubnet1
+        - !Ref mySubnet2
+        - !Ref mySubnet3
+      Tags:
+        - Key: Application
+          Value: WebApp
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-csye6225-load-balancer
+      Type: application    
+
+  myLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: '30'
+      HealthCheckTimeoutSeconds: '5'
+      HealthCheckPath: '/healthz'
+      HealthCheckPort: '8080'
+      HealthCheckProtocol: 'HTTP'
+      HealthyThresholdCount: '2'
+      IpAddressType: ipv4
+      Name: !Sub ${AWS::StackName}-csye6225-lb-tg
+      Port: '8080'
+      Protocol: HTTP
+      VpcId: !Ref myVPC
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 20 
+      TargetType: instance
+      UnhealthyThresholdCount: 2
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-csye6225-lb-tg
+  
+  myLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - myLBTargetGroup
+      - myLoadBalancer
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref myLBTargetGroup
+      LoadBalancerArn: !Ref myLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  
+  myDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Join ["", [!Ref S3BucketName, "."]]
+      Comment: Resource record for load balancer application
+      Name: !Join ["", [!Ref S3BucketName, "."]]
+      Type: A
+      AliasTarget:
+        HostedZoneId:
+          Fn::GetAtt:
+          - myLoadBalancer
+          - CanonicalHostedZoneID
+        DNSName:
+          Fn::GetAtt:
+          - myLoadBalancer
+          - DNSName
+
 Outputs:
   VpcId:
     Description: The VPC ID
     Value: !Ref myVPC
-  EC2InstanceId:
-    Description: EC2 Instance ID
-    Value: !Ref myEC2Instance
