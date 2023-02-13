@@ -358,8 +358,15 @@ Resources:
               - 's3:Get*'
               - 's3:List*'
             Resource:
-              - !Sub '${CodeDeployBucket}'
-              - !Sub '${CodeDeployBucket}/*'
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref CodeDeployBucket
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref CodeDeployBucket
+                  - /*
       Roles:
         - Ref: CodeDeployEC2ServiceRole
 
@@ -374,8 +381,15 @@ Resources:
             Action:
               - 's3:PutObject'
             Resource:
-              - !Sub '${CodeDeployBucket}'
-              - !Sub '${CodeDeployBucket}/*'
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref CodeDeployBucket
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref CodeDeployBucket
+                  - /*
       Users:
         - ghactions-app
   
@@ -460,6 +474,8 @@ Resources:
     Properties:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
       Description: Allows EC2 instances to call AWS services on your behalf
       RoleName: CodeDeployEC2ServiceRole
       AssumeRolePolicyDocument:
@@ -491,7 +507,7 @@ Resources:
                 - "codedeploy.amazonaws.com"
             Action:
               - "sts:AssumeRole"
-      Path: "/"    
+      Path: "/" 
 
   myEC2InstanceProfile:
     Type: "AWS::IAM::InstanceProfile"
@@ -661,6 +677,16 @@ Resources:
               - - echo "export REGION=
                 - !Ref AWS::Region
                 - '" >> /etc/profile.d/envvariables.sh'
+            - Fn::Join:
+              - ''
+              - - echo "SNS_TOPIC_ARN=
+                - !Ref SNSTopic
+                - '" >> /etc/environment'
+            - Fn::Join:
+              - ''
+              - - echo "export SNS_TOPIC_ARN=
+                - !Ref SNSTopic
+                - '" >> /etc/profile.d/envvariables.sh'
             - sudo chmod 755 /etc/profile.d/envvariables.sh
             - sudo chown ec2-user /etc/profile.d/envvariables.sh
             - sudo systemctl start health-check-api.service
@@ -828,6 +854,149 @@ Resources:
           Fn::GetAtt:
           - myLoadBalancer
           - DNSName
+
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      RoleName: lambdaRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: EmailNotification
+      MemorySize: 512
+      Code: 
+        S3Bucket: !Ref CodeDeployBucket
+        S3Key: serverless-0.0.1-SNAPSHOT.jar
+      Role: !GetAtt 
+        - LambdaExecutionRole
+        - Arn
+      Timeout: 90
+      Environment:
+        Variables:
+          DOMAIN_NAME: !Ref S3BucketName
+      Handler: 'com.example.serverless.EmailNotification::handleRequest'
+      Runtime: java11
+    DependsOn: [LambdaExecutionRole]
+
+
+  GHUploadLambdaFunctionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: GH-Upload-Lambda-Function
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: 
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+            Resource: [!GetAtt LambdaFunction.Arn, !Join ["", [!GetAtt LambdaFunction.Arn, "/*"]]]
+      Roles:
+        - Ref: LambdaExecutionRole
+      Users:
+        - ghactions-app
+    DependsOn: [LambdaFunction]
+
+  SNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      TopicName: Notification_Email
+      Subscription:
+        - Endpoint: !GetAtt 
+            - LambdaFunction
+            - Arn
+          Protocol: lambda
+    DependsOn: [LambdaFunction]
+
+  myDynamoDB:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      # ProvisionedThroughput:
+      #   ReadCapacityUnits: 10
+      #   WriteCapacityUnits: 5
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: 'TRUE'
+      TableName: myDynamoDB
+
+  myDynamoDBEmail:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      # ProvisionedThroughput:
+      #   ReadCapacityUnits: 10
+      #   WriteCapacityUnits: 5
+      TableName: myDynamoDBEmail
+
+  LambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:*'
+      FunctionName: !GetAtt 
+        - LambdaFunction
+        - Arn
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref SNSTopic
+    DependsOn: [LambdaFunction, SNSTopic]
+
+  LambdaDynamoSESS3SNSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: Lambda-DynamoDB-SES-S3-SNS-Policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: 
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+            Resource:
+              - !GetAtt myDynamoDBEmail.Arn
+              - !GetAtt myDynamoDB.Arn
+          - Effect: Allow
+            Action: 
+              - ses:VerifyEmailAddress
+              - ses:SendEmail
+              - ses:SendRawEmail
+            Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+          - Effect: Allow
+            Action: 
+              - s3:GetObject
+            Resource: [!Join ["", ["arn:aws:s3:::", !Ref CodeDeployBucket]], !Join ["", ["arn:aws:s3:::", !Ref CodeDeployBucket, "/*"]]]
+          - Effect: Allow
+            Action: 
+              - sns:ConfirmSubscription
+            Resource: !Ref SNSTopic
+      Roles: 
+        - !Ref LambdaExecutionRole
+    DependsOn: [myDynamoDBEmail , myDynamoDB , SNSTopic , LambdaExecutionRole]
+      
 
 Outputs:
   VpcId:
